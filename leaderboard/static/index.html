@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ranking ao vivo</title>
+  <style>
+    :root {
+      --bg: #06080f; --surface: #101828; --border: rgba(148,163,184,.14);
+      --text: #e8eef8; --muted: #8b9bb4; --accent: #f87171; --ok: #34d399; --gold: #fbbf24;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    body { min-height: 100vh; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; padding: 24px 16px; }
+    .wrap { max-width: 1040px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+    h1 { font-size: 1.6rem; letter-spacing: -.02em; }
+    .status { display: inline-flex; align-items: center; gap: 8px; font-size: .85rem; color: var(--muted); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; }
+    .dot.on { background: var(--ok); box-shadow: 0 0 0 4px rgba(52,211,153,.18); }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+    .stat b { display: block; font-size: 1.35rem; }
+    .stat span { color: var(--muted); font-size: .8rem; }
+    .grid { display: grid; gap: 14px; }
+    @media (min-width: 820px) { .grid { grid-template-columns: 1.3fr 1fr; } }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 14px; min-width: 0; }
+    .card h2 { font-size: 1rem; margin-bottom: 10px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .tabs button { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: .8rem; cursor: pointer; }
+    .tabs button.on { color: var(--text); border-color: rgba(248,113,113,.5); background: rgba(248,113,113,.12); }
+    ol { list-style: none; padding: 0; display: grid; gap: 4px; }
+    .row { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: center; padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.02); transition: background .6s; }
+    .row.flash { background: rgba(251,191,36,.18); }
+    .row .pos { color: var(--muted); font-weight: 700; }
+    .row:nth-child(1) .pos { color: var(--gold); }
+    .row .score { font-variant-numeric: tabular-nums; font-weight: 700; }
+    .feed li { padding: 7px 10px; border-left: 2px solid var(--border); font-size: .88rem; animation: in .4s ease both; }
+    .feed li.hs { border-left-color: var(--accent); }
+    .feed small { color: var(--muted); }
+    .empty { color: var(--muted); font-size: .9rem; padding: 8px 2px; }
+    @keyframes in { from { opacity: 0; transform: translateY(-6px); } }
+    code { background: rgba(148,163,184,.12); padding: 1px 6px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Ranking ao vivo</h1>
+      <span class="status"><span class="dot" id="dot"></span><span id="statusText">conectando…</span></span>
+    </header>
+
+    <section class="stats" id="stats"></section>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Ranking</h2>
+        <div class="tabs" id="metricTabs">
+          <button data-metric="kills" class="on">kills</button>
+          <button data-metric="headshots">headshots</button>
+          <button data-metric="longest">maior distância</button>
+        </div>
+        <div class="tabs" id="periodTabs">
+          <button data-period="day" class="on">hoje</button>
+          <button data-period="week">semana</button>
+          <button data-period="all">geral</button>
+        </div>
+        <ol id="board"></ol>
+      </section>
+      <section class="card">
+        <h2>Últimas kills</h2>
+        <ol class="feed" id="feed"><li class="empty">Rode <code>python scripts/simulate.py</code> pra gerar eventos.</li></ol>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const state = { metric: "kills", period: "day" };
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    const fmt = (metric, v) => (metric === "longest" ? `${v.toFixed(1)} m` : Math.round(v));
+    let previous = new Map();
+
+    async function loadBoard(flashId) {
+      const rows = await (await fetch(`/boards/${state.metric}?period=${state.period}&limit=10`)).json();
+      $("board").innerHTML = rows.length
+        ? rows.map((r) => `<li class="row${r.player_id === flashId && previous.get(r.player_id) !== r.score ? " flash" : ""}">
+            <span class="pos">${r.rank}</span><span>${esc(r.name)}</span><span class="score">${fmt(state.metric, r.score)}</span></li>`).join("")
+        : `<li class="empty">Ninguém nesse ranking ainda.</li>`;
+      previous = new Map(rows.map((r) => [r.player_id, r.score]));
+      setTimeout(() => document.querySelectorAll(".row.flash").forEach((e) => e.classList.remove("flash")), 700);
+    }
+
+    async function loadStats() {
+      const res = await fetch("/summary");
+      const s = await res.json();
+      const cards = [
+        [s.events, "kills registradas"],
+        [s.players, "jogadores"],
+        [s.top_killer_today ? `${esc(s.top_killer_today.name)} (${s.top_killer_today.score})` : "—", "quem mais matou hoje"],
+        [s.longest_shot ? `${s.longest_shot.score.toFixed(1)} m` : "—", "tiro mais longo"],
+        [res.headers.get("X-Cache"), "cache do resumo"],
+      ];
+      $("stats").innerHTML = cards.map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
+    }
+
+    function addToFeed(e) {
+      const feed = $("feed");
+      feed.querySelector(".empty")?.remove();
+      const li = document.createElement("li");
+      if (e.headshot) li.className = "hs";
+      li.innerHTML = `<b>${esc(e.killer_name)}</b> matou <b>${esc(e.victim_name)}</b> com ${esc(e.weapon)}
+        <small>· ${e.distance.toFixed(1)} m${e.headshot ? " · na cabeça" : ""}</small>`;
+      feed.prepend(li);
+      while (feed.children.length > 15) feed.lastChild.remove();
+    }
+
+    // vários eventos seguidos viram uma recarga só
+    let pending = null;
+    function refreshSoon(flashId) {
+      clearTimeout(pending);
+      pending = setTimeout(() => { loadBoard(flashId); loadStats(); }, 250);
+    }
+
+    for (const [id, key] of [["metricTabs", "metric"], ["periodTabs", "period"]]) {
+      $(id).addEventListener("click", (ev) => {
+        const b = ev.target.closest("button");
+        if (!b) return;
+        state[key] = b.dataset[key];
+        $(id).querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+        loadBoard();
+      });
+    }
+
+    const source = new EventSource("/stream");
+    source.onopen = () => { $("dot").classList.add("on"); $("statusText").textContent = "ao vivo"; };
+    source.onerror = () => { $("dot").classList.remove("on"); $("statusText").textContent = "reconectando…"; };
+    source.onmessage = (msg) => {
+      const e = JSON.parse(msg.data);
+      addToFeed(e);
+      refreshSoon(e.killer_id);
+    };
+
+    loadBoard();
+    loadStats();
+  </script>
+</body>
+</html>
